@@ -11,19 +11,13 @@ HEADERS = {
 
 
 def get_embedding(texts):
-    """
-    texts: List[str]
-    return: List[embedding]
-    """
     payload = json.dumps({
         "model": "bge-m3",
         "input": texts,
         "encoding_format": "float"
     })
-
     response = requests.post(BGE_URL, headers=HEADERS, data=payload)
     data = response.json()["data"]
-
     return [item["embedding"] for item in data]
 
 
@@ -32,68 +26,95 @@ def cosine_similarity(a, b):
     return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
 
 
-def intent_recognize(query: str, intent_list: list, threshold=0.75):
+def intent_recognize(query: str, intent_list: list, threshold=0.75, top=3):
     """
-    query: 用户输入文本
-    intent_list: 意图列表
-    threshold: 小于此阈值则返回 top3 推荐
+    返回所有达到阈值的意图，不只返回一个
     """
 
-    # --- 1. 生成 query + 意图列表 的向量 ---
-    texts = [query] + intent_list
+    # 1. 对 query 和所有意图进行向量化
+    intents = [f'{item["intent"]},{item["description"]}' for item in intent_list]
+    texts = [query] + intents
     embeddings = get_embedding(texts)
 
     query_emb = embeddings[0]
     intent_embs = embeddings[1:]
 
-    # --- 2. 计算所有意图与 query 的相似度 ---
+    # 2. 计算相似度
     sims = []
     for i, emb in enumerate(intent_embs):
         sim = cosine_similarity(query_emb, emb)
         sims.append((intent_list[i], sim))
 
-    # --- 3. 排序 ---
+    # 3. 根据相似度排序
     sims = sorted(sims, key=lambda x: x[1], reverse=True)
 
-    best_intent, best_score = sims[0]
+    # 4. 找出所有达到阈值的
+    hits = [item for item in sims if item[1] >= threshold]
 
-    # --- 4. 判断是否达到阈值 ---
-    if best_score >= threshold:
+    if hits:
+        # 全部返回
         return {
             "type": "match",
-            "intent": best_intent,
-            "score": round(best_score, 4)
+            "intents": [
+                {
+                    "intent": item[0],
+                    "score": round(item[1], 4)
+                }
+                for item in hits[:top]
+            ]
         }
     else:
-        # 返回推荐 3 个意图
-        top3 = sims[:3]
+        # 没有达到阈值 → 返回 top3
         return {
             "type": "recommend",
             "recommend": [
-                {"intent": item[0], "score": round(item[1], 4)}
-                for item in top3
+                {
+                    "intent": item[0],
+                    "score": round(item[1], 4)}
+                for item in sims[:top]
             ]
         }
 
 
-# ==========================
-#       测试示例
-# ==========================
+# ==============
+#   测试案例
+# ==============
 if __name__ == "__main__":
     intent_list = [
-        "查询天气",
-        "播放音乐",
-        "讲一个笑话",
-        "打开日历",
-        "帮我订餐",
-        "订购机票",
-        "订购高铁票"
+        {
+            "intent": "查询天气",
+            "description": "用于获取当前或未来的天气情况。"
+        },
+        {
+            "intent": "播放音乐",
+            "description": "用于播放指定歌曲、歌单或音乐类型。"
+        },
+        {
+            "intent": "讲一个笑话",
+            "description": "用于让系统随机讲述一个轻松有趣的笑话。"
+        },
+        {
+            "intent": "打开日历",
+            "description": "用于打开日历查看日期、日程安排等信息。"
+        },
+        {
+            "intent": "帮我订餐",
+            "description": "用于根据用户需求下单外卖或餐食预定。"
+        },
+        {
+            "intent": "订购机票",
+            "description": "用于查询并预订航班机票。"
+        },
+        {
+            "intent": "订购高铁票",
+            "description": "用于查询并购买高铁车票。"
+        }
     ]
-
-    # query = "今天天气怎么样？"
+    # query = "查询一下今天北京未来15天的天气"
     # query = "去北京要怎么坐车？"
     # query = "故事会里面会讲什么呢？"
-    query = "订购高铁票？"
+    # query = "我需要买高铁票去北京，然后买飞机票回上海"
+    query = "我需要订购高铁票"
 
-    result = intent_recognize(query, intent_list)
-    print(json.dumps(result, ensure_ascii=False))
+    result = intent_recognize(query, intent_list, threshold=0.75, top=3)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
